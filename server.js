@@ -20,7 +20,7 @@ app.use(session({
   saveUninitialized: false
 }));
 
-mongoose.connect('mongodb://127.0.0.1:27017/geazlwing')
+mongoose.connect('mongodb+srv://user1:malafiki@leodb.5mf7q.mongodb.net/?retryWrites=true&w=majority&appName=leodb')
   .then(() => {
     console.log("mongo connected");
   })
@@ -168,7 +168,7 @@ app.post('/uploadproduct', upload.single('media'), async (req, res) => {
       sendEmail(c.email, 'New Product Available', `
         Hello, check out our new product: ${name} for ${amount} TZS.
         <br><img src="${result.secure_url}" style="width:200px"/>
-        <br><a href="http://your-website.com">Visit Us</a>
+        <br><a href="https://xin-order-system.onrender.com">Visit Us</a>
       `);
     });
     fs.unlinkSync(req.file.path);
@@ -310,7 +310,7 @@ cron.schedule('0 8,18 * * *', async () => {
     users.forEach(u => {
       sendEmail(u.email, 'Visit Us Today!', `
         Good day ${u.name}, check our latest offers and deals!
-        <br><a href="http://your-website.com">Visit Our Shop</a>
+        <br><a href="https://xin-order-system.onrender.com">Visit Our Shop</a>
       `);
     });
     console.log('Daily marketing emails sent');
