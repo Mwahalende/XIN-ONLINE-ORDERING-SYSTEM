@@ -8,6 +8,7 @@ const cron = require('node-cron');
 const cloudinary = require('cloudinary').v2;
 const cors = require('cors');
 const session = require('express-session');
+const bcrypt = require('bcrypt');
 
 const app = express();
 app.use(cors());
@@ -15,26 +16,21 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(session({
-  secret: 'your_secret_key', // change this to a strong secret
+  secret: 'your_secret_key',
   resave: false,
   saveUninitialized: false
 }));
 
 mongoose.connect('mongodb+srv://user1:malafiki@leodb.5mf7q.mongodb.net/?retryWrites=true&w=majority&appName=leodb')
-  .then(() => {
-    console.log("mongo connected");
-  })
-  .catch((err) => {
-    console.log("mongo error", err);
-  });
+  .then(() => console.log("mongo connected"))
+  .catch((err) => console.log("mongo error", err));
 
 cloudinary.config({
-  cloud_name: 'drxvftof4',       // Use your real cloudinary credentials here
+  cloud_name: 'drxvftof4',
   api_key: '872961783425164',
   api_secret: 'KWEJ6SbPybty7YefACspZ-j-ym0'
 });
 
-// === SCHEMAS ===
 const Admin = mongoose.model('Admin', new mongoose.Schema({
   name: String,
   email: String,
@@ -60,7 +56,7 @@ const Product = mongoose.model('Product', new mongoose.Schema({
 const Order = mongoose.model('Order', new mongoose.Schema({
   name: String,
   product: String,
-  amount: Number, // total cost
+  amount: Number,
   quantity: Number,
   email: String,
   contact: String,
@@ -68,16 +64,14 @@ const Order = mongoose.model('Order', new mongoose.Schema({
   createdAt: { type: Date, default: Date.now }
 }));
 
-// === EMAIL SETUP ===
 const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
-    user: 'zumalipas@gmail.com',  // your real email here
-    pass: 'xsds bimk ndlb vmrr'   // your real app password here
+    user: 'zumalipas@gmail.com',
+    pass: 'xsds bimk ndlb vmrr'
   }
 });
 
-// === EMAIL FUNCTION ===
 function sendEmail(to, subject, html) {
   transporter.sendMail({
     from: 'zumalipas@gmail.com',
@@ -91,43 +85,47 @@ function sendEmail(to, subject, html) {
 
 // === ADMIN REGISTER ===
 app.post('/adminregister', async (req, res) => {
-  const { name, email, password, contact } = req.body;
-  const exist = await Admin.findOne({ email });
-  if (exist) return res.send('Admin already exists');
-  await Admin.create({ name, email, password, contact });
-  sendEmail(email, 'Admin Registered', `Welcome ${name}, your admin account is ready.`);
-  res.redirect('/adminlogin.html');
+  try {
+    const { name, email, password, contact } = req.body;
+    const exists = await Admin.findOne({ email });
+    if (exists) return res.status(400).json({ error: 'Admin already exists' });
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const newAdmin = new Admin({ name, email, password: hashedPassword, contact });
+    await newAdmin.save();
+
+    req.session.admin = { name: newAdmin.name, email: newAdmin.email };
+    return res.redirect('/admindashboard.html');
+  } catch (err) {
+    console.error('Admin registration failed:', err);
+    return res.status(500).json({ error: 'Registration failed' });
+  }
 });
 
-// === ADMIN LOGIN ===
+// ✅ FIXED ADMIN LOGIN — bcrypt.compare
 app.post('/adminlogin', async (req, res) => {
   const { email, password } = req.body;
-  const admin = await Admin.findOne({ email, password });
+  const admin = await Admin.findOne({ email });
   if (!admin) return res.send('Invalid credentials');
+
+  const isMatch = await bcrypt.compare(password, admin.password);
+  if (!isMatch) return res.send('Invalid credentials');
+
   req.session.admin = { email: admin.email, name: admin.name, contact: admin.contact };
   res.redirect('/admindashboard.html');
 });
 
-// === GET LOGGED-IN ADMIN INFO FOR DASHBOARD ===
 app.get('/getadmin', (req, res) => {
-  if (!req.session.admin) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+  if (!req.session.admin) return res.status(401).json({ error: 'Unauthorized' });
   res.json(req.session.admin);
 });
 
-// === ADMIN LOGOUT ===
 app.get('/logout', (req, res) => {
-  req.session.destroy(() => {
-    res.redirect('/adminlogin.html');
-  });
+  req.session.destroy(() => res.redirect('/adminlogin.html'));
 });
 
-// === PROTECT ADMIN DASHBOARD ===
 app.get('/admindashboard.html', (req, res, next) => {
-  if (!req.session.admin) {
-    return res.redirect('/adminlogin.html');
-  }
+  if (!req.session.admin) return res.redirect('/adminlogin.html');
   next();
 }, express.static(path.join(__dirname, 'public', 'admindashboard.html')));
 
@@ -149,20 +147,18 @@ app.post('/login', async (req, res) => {
   res.json({ success: true, user: { name: user.name, email: user.email, contact: user.contact } });
 });
 
-// === MULTER SETUP ===
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, 'uploads'),
   filename: (req, file, cb) => cb(null, Date.now() + path.extname(file.originalname))
 });
 const upload = multer({ storage });
 
-// === PRODUCT UPLOAD ===
 app.post('/uploadproduct', upload.single('media'), async (req, res) => {
   try {
     const { name, amount, description } = req.body;
     const result = await cloudinary.uploader.upload(req.file.path, { resource_type: "auto" });
     await Product.create({ name, amount, description, url: result.secure_url });
-    // Notify all customers of new product
+
     const customers = await Customer.find();
     customers.forEach(c => {
       sendEmail(c.email, 'New Product Available', `
@@ -179,7 +175,6 @@ app.post('/uploadproduct', upload.single('media'), async (req, res) => {
   }
 });
 
-// === GET PRODUCTS ===
 app.get('/products', async (req, res) => {
   try {
     const data = await Product.find();
@@ -189,7 +184,6 @@ app.get('/products', async (req, res) => {
   }
 });
 
-// === GET ORDERS ===
 app.get('/orders', async (req, res) => {
   try {
     const data = await Order.find();
@@ -199,7 +193,6 @@ app.get('/orders', async (req, res) => {
   }
 });
 
-// === PLACE ORDER ===
 app.post('/placeorder', async (req, res) => {
   try {
     const { product, amount, email, contact, quantity } = req.body;
@@ -214,13 +207,11 @@ app.post('/placeorder', async (req, res) => {
   }
 });
 
-// === ADMIN INFO UPDATE ===
 app.post('/updateadmin', async (req, res) => {
   const { name, email, contact } = req.body;
   try {
     const admin = await Admin.findOneAndUpdate({ email }, { name, contact }, { new: true });
     if (!admin) return res.status(404).json({ error: 'Admin not found' });
-    // Update session info
     req.session.admin = { email: admin.email, name: admin.name, contact: admin.contact };
     res.json(admin);
   } catch {
@@ -228,7 +219,6 @@ app.post('/updateadmin', async (req, res) => {
   }
 });
 
-// === PRODUCT UPDATE (TEXT ONLY) ===
 app.post('/updateproduct', async (req, res) => {
   const { id, name, amount, description } = req.body;
   try {
@@ -239,6 +229,7 @@ app.post('/updateproduct', async (req, res) => {
     res.status(500).json({ error: 'Update failed' });
   }
 });
+
 app.delete('/deleteproduct/:id', async (req, res) => {
   try {
     const prod = await Product.findById(req.params.id);
@@ -249,25 +240,21 @@ app.delete('/deleteproduct/:id', async (req, res) => {
       const fileName = urlParts[urlParts.length - 1];
       const publicId = fileName.substring(0, fileName.lastIndexOf('.'));
 
-      // Determine resource type by file extension
       const ext = fileName.split('.').pop().toLowerCase();
       const imageExts = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'tiff'];
       const videoExts = ['mp4', 'webm', 'ogg', 'avi', 'mov', 'flv', 'mkv'];
 
-      let resourceType = 'image'; // default
+      let resourceType = 'image';
       if (videoExts.includes(ext)) {
         resourceType = 'video';
       } else if (!imageExts.includes(ext)) {
-        resourceType = 'raw'; // fallback for unknown types
+        resourceType = 'raw';
       }
 
       await cloudinary.uploader.destroy(publicId, { resource_type: resourceType });
     }
 
-    // Delete all orders related to this product by name
     await Order.deleteMany({ product: prod.name });
-
-    // Delete the product itself
     await Product.findByIdAndDelete(req.params.id);
 
     res.json({ success: true, message: 'Product and related orders deleted.' });
@@ -277,8 +264,6 @@ app.delete('/deleteproduct/:id', async (req, res) => {
   }
 });
 
-
-// === ORDER APPROVAL ===
 app.post('/approveorder/:id', async (req, res) => {
   try {
     const order = await Order.findById(req.params.id);
@@ -293,7 +278,6 @@ app.post('/approveorder/:id', async (req, res) => {
   }
 });
 
-// === ORDER DELETE ===
 app.delete('/deleteorder/:id', async (req, res) => {
   try {
     await Order.findByIdAndDelete(req.params.id);
@@ -303,7 +287,6 @@ app.delete('/deleteorder/:id', async (req, res) => {
   }
 });
 
-// === DAILY MARKETING EMAILS (8AM & 6PM) ===
 cron.schedule('0 8,18 * * *', async () => {
   try {
     const users = await Customer.find();
@@ -319,26 +302,17 @@ cron.schedule('0 8,18 * * *', async () => {
   }
 });
 
-// === USER FORGOT PASSWORD ===
-app.post('/user-forgot-password', async (req, res) => {
-  const { email } = req.body;
-  const user = await Customer.findOne({ email });
-  if (!user) return res.json({ success: false, message: 'Email not found.' });
-  const newPassword = Math.random().toString(36).slice(-8);
-  user.password = newPassword;
-  await user.save();
-  sendEmail(email, 'Password Reset', `Your new password is: <b>${newPassword}</b>`);
-  res.json({ success: true, message: 'A new password has been sent to your email.' });
-});
-
-// === ADMIN FORGOT PASSWORD ===
+// ✅ FIXED ADMIN FORGOT PASSWORD — hashed new password
 app.post('/admin-forgot-password', async (req, res) => {
   const { email } = req.body;
   const admin = await Admin.findOne({ email });
   if (!admin) return res.json({ success: false, message: 'Email not found.' });
+
   const newPassword = Math.random().toString(36).slice(-8);
-  admin.password = newPassword;
+  const hashed = await bcrypt.hash(newPassword, 10);
+  admin.password = hashed;
   await admin.save();
+
   sendEmail(email, 'Admin Password Reset', `Your new admin password is: <b>${newPassword}</b>`);
   res.json({ success: true, message: 'A new password has been sent to your email.' });
 });
